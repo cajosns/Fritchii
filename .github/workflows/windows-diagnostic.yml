@@ -1,0 +1,73 @@
+name: Windows diagnostic
+'on':
+  workflow_dispatch: {}
+  push:
+    branches:
+    - diagnostic-windows-v4.1
+    paths:
+    - .github/workflows/windows-diagnostic.yml
+    - src/**
+    - CMakeLists.txt
+    - cpmfile.json
+permissions:
+  contents: read
+jobs:
+  windows-diagnostic:
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+    - name: Check out source
+      uses: actions/checkout@v5
+      with:
+        persist-credentials: false
+    - name: Set up MSVC
+      uses: ilammy/msvc-dev-cmd@v1
+    - name: Install Qt on Windows
+      uses: jurplel/install-qt-action@v4
+      with:
+        version: 6.8.3
+        host: windows
+        target: desktop
+        arch: win64_msvc2022_64
+        modules: qtcharts
+        cache: true
+    - name: Install Vulkan SDK on Windows
+      shell: pwsh
+      run: ./tools/windows/install-vulkan-sdk.ps1
+    - name: Verify Vulkan tools on Windows
+      shell: pwsh
+      run: glslangValidator --version
+    - name: Configure Windows
+      shell: bash
+      run: cmake -S . -B build/release -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_TESTING=OFF -DYUZU_TESTS=OFF -DYUZU_CMD=OFF -DYUZU_ROOM=OFF -DYUZU_ROOM_STANDALONE=OFF -DYUZU_USE_BUNDLED_QT=OFF -DYUZU_USE_BUNDLED_SDL3=ON -DENABLE_UPDATE_CHECKER=OFF   -DUSE_DISCORD_PRESENCE=OFF   -DUSE_CCACHE=OFF
+    - name: Build Windows diagnostic
+      shell: pwsh
+      run: 'cmake --build build/release --target yuzu --parallel 4
+
+        if ($LASTEXITCODE -ne 0) { throw "Build failed" }'
+    - name: Package Windows binary
+      shell: pwsh
+      run: '$ErrorActionPreference = "Stop"
+
+        if (-not (Test-Path "build/release/bin/lichii.exe")) { throw "Missing lichii.exe" }
+
+        windeployqt --release --no-translations build/release/bin/lichii.exe
+
+        if ($LASTEXITCODE -ne 0) { throw "windeployqt failed" }
+
+        $symbol = Get-ChildItem build/release -Recurse -Filter lichii.pdb | Select-Object -First 1
+
+        if (-not $symbol) { throw "Missing matching lichii.pdb" }
+
+        $dest = Join-Path (Resolve-Path build/release/bin) ''lichii.pdb''
+
+        if ($symbol.FullName -ne $dest) { Copy-Item $symbol.FullName $dest }
+
+        '
+    - name: Upload executable and matching symbols
+      uses: actions/upload-artifact@v7
+      with:
+        name: fritchii-windows-diagnostic-${{ github.sha }}
+        path: build/release/bin/
+        if-no-files-found: error
+        retention-days: 7
